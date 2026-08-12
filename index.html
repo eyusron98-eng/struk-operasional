@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Struk Operasional MBG — Koperasi ISS</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Segoe UI',Arial,sans-serif; background:#f1f5f9; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ══════════════════════════════════════════════════════════════
+// ⚙️  KONFIGURASI — GANTI URL INI SETELAH DEPLOY APPS SCRIPT
+// ══════════════════════════════════════════════════════════════
+const SCRIPT_URL = "GANTI_DENGAN_URL_APPS_SCRIPT_ANDA";
+
+// ══════════════════════════════════════════════════════════════
+// DATA STATIS
+// ══════════════════════════════════════════════════════════════
+const DAPUR_LIST = [
+  { id:"mekarsari",   label:"Mekarsari 01",  kode:"MKS", emoji:"🌿" },
+  { id:"cipeujeuh",  label:"Cipeujeuh 02",   kode:"CPJ", emoji:"🏡" },
+  { id:"wangisagara",label:"Wangisagara 01", kode:"WGS", emoji:"🌾" },
+  { id:"paseh",      label:"Paseh 01",       kode:"PSH", emoji:"🍃" },
+];
+const SATUAN_STD = ["pcs","lusin","dus","rim","kg","gram","liter","mL","roll","pak","botol","kaleng","lembar","set","unit","meter","Lainnya..."];
+const KAT_ICON = {"ATK":"📎","Alat Kebersihan":"🧹","Barang Habis Pakai":"📦","APD":"🦺"};
+const INIT_TPL = {
+  namaToko:"Koperasi ISS", alamat:"", telepon:"", judulDokumen:"BUKTI PERMINTAAN BARANG",
+  footer:"", catatan:"", ukuranKertas:"58mm",
+  showTanggal:true, showNomor:true, showPenerima:false, showTtd:false, showStempel:false,
+  style:"simpel", logo:null,
+};
+const TMPL_INFO = [
+  {id:"simpel",  label:"Simpel",           desc:"Ringkas, tanpa tanda terima",       icon:"⚡"},
+  {id:"standar", label:"Standar",          desc:"Ada kolom tanda terima",            icon:"📄"},
+  {id:"korporat",label:"Formal Korporat",  desc:"Kop kotak resmi, gaya BUMN",        icon:"🏢"},
+  {id:"logo",    label:"Dengan Logo",      desc:"Logo besar di atas, minimalis",     icon:"🖼️"},
+  {id:"lengkap", label:"Lengkap & Ganda",  desc:"TTD ganda + stempel, paling formal",icon:"📋"},
+];
+const STYLE_PRESET = {
+  simpel:  { showNomor:true, showTanggal:true, showPenerima:false, showTtd:false, showStempel:false },
+  standar: { showNomor:true, showTanggal:true, showPenerima:true,  showTtd:false, showStempel:false },
+  korporat:{ showNomor:true, showTanggal:true, showPenerima:false, showTtd:true,  showStempel:false },
+  logo:    { showNomor:true, showTanggal:true, showPenerima:true,  showTtd:false, showStempel:false },
+  lengkap: { showNomor:true, showTanggal:true, showPenerima:true,  showTtd:true,  showStempel:true  },
+};
+
+// ══════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════
+const fmt = (n) => new Intl.NumberFormat("id-ID").format(n);
+const genNo = (kode) => {
+  const d=new Date(), p=(x)=>String(x).padStart(2,"0");
+  return `${kode}/${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}/${String(Math.floor(Math.random()*9000)+1000)}`;
+};
+
+// API helper — pakai text/plain agar tidak kena CORS preflight Apps Script
+async function apiGet(params) {
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch(`${SCRIPT_URL}?${qs}`);
+  return res.json();
+}
+async function apiPost(body) {
+  const res = await fetch(SCRIPT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+// ══════════════════════════════════════════════════════════════
+// ESC/POS ENCODER (minimal, cukup untuk cetak teks + potong kertas)
+// Kompatibel dengan sebagian besar printer thermal Bluetooth generik.
+// ══════════════════════════════════════════════════════════════
+function encodeReceiptESCPOS(tx, tmpl, dapur) {
+  const enc = new TextEncoder();
+  const bytes = [];
+  const push = (arr) => bytes.push(...arr);
+  const text = (s) => push(Array.from(enc.encode(s + "\n")));
+  const CENTER = [0x1b,0x61,0x01], LEFT=[0x1b,0x61,0x00];
+  const BOLD_ON=[0x1b,0x45,0x01], BOLD_OFF=[0x1b,0x45,0x00];
+  const INIT=[0x1b,0x40];
+  const CUT=[0x1d,0x56,0x41,0x10];
+  const LINE = "-".repeat(tmpl.ukuranKertas==="80mm"?42:32);
+
+  push(INIT); push(CENTER); push(BOLD_ON);
+  text(tmpl.namaToko || "Koperasi ISS");
+  push(BOLD_OFF);
+  text(`SPPG ${dapur.label}`);
+  if (tmpl.alamat) text(tmpl.alamat);
+  if (tmpl.telepon) text(`Telp: ${tmpl.telepon}`);
+  text(LINE);
+  push(BOLD_ON); text(tmpl.judulDokumen || "BUKTI PERMINTAAN BARANG"); push(BOLD_OFF);
+  text(LINE);
+  push(LEFT);
+  if (tmpl.showNomor) text(`No: ${tx.id}`);
+  if (tmpl.showTanggal) text(`Tgl: ${new Date(tx.tanggal).toLocaleString("id-ID")}`);
+  text(LINE);
+  tx.items.forEach(i=>{
+    text(i.nama);
+    const rincian = `  ${i.qty} ${i.satuan} x ${fmt(i.harga)}`;
+    const total = `Rp ${fmt(i.qty*i.harga)}`;
+    text(rincian + " ".repeat(Math.max(1,32-rincian.length-total.length)) + total);
+  });
+  text(LINE);
+  if (tx.diskon>0) text(`Diskon: -Rp ${fmt(tx.diskon)}`);
+  push(BOLD_ON); text(`TOTAL: Rp ${fmt(tx.total)}`); push(BOLD_OFF);
+  if (tmpl.showPenerima) { text(LINE); text("Penerima: ..................."); }
+  if (tmpl.showTtd) {
+    text(""); text("Diserahkan,        Diterima,");
+    text(""); text(""); text("(........)         (........)");
+  }
+  if (tmpl.footer) { text(LINE); push(CENTER); text(tmpl.footer); push(LEFT); }
+  text(""); text(""); text("");
+  push(CUT);
+  return new Uint8Array(bytes);
+}
+
+// Kirim data ke printer via Web Bluetooth
+// Banyak printer thermal generik memakai UUID berikut. Jika printer Anda
+// tidak terhubung, cek dokumentasi UUID service/characteristic printer Anda.
+const PRINTER_SERVICE_UUIDS = [
+  "000018f0-0000-1000-8000-00805f9b34fb",
+  "49535343-fe7d-4ae5-8fa9-9fafd205e455",
+  "e7810a71-73ae-499d-8c15-faa9aef0c3f2",
+];
+
+async function printViaBluetooth(bytes, onStatus) {
+  if (!navigator.bluetooth) {
+    throw new Error("Browser ini tidak mendukung Web Bluetooth. Gunakan Chrome/Edge di Android atau Desktop.");
+  }
+  onStatus("Mencari printer...");
+  const device = await navigator.bluetooth.requestDevice({
+    acceptAllDevices: true,
+    optionalServices: PRINTER_SERVICE_UUIDS,
+  });
+  onStatus(`Menghubungkan ke ${device.name || "printer"}...`);
+  const server = await device.gatt.connect();
+
+  let service = null, char = null;
+  for (const uuid of PRINTER_SERVICE_UUIDS) {
+    try {
+      service = await server.getPrimaryService(uuid);
+      const chars = await service.getCharacteristics();
+      char = chars.find(c => c.properties.writeWithoutResponse || c.properties.write);
+      if (char) break;
+    } catch (e) { /* coba UUID berikutnya */ }
+  }
+  if (!char) throw new Error("Tidak menemukan characteristic printer yang cocok. Printer mungkin memakai profil berbeda.");
+
+  onStatus("Mengirim data cetak...");
+  const CHUNK = 180; // beberapa printer BLE punya batas ukuran paket
+  for (let i=0; i<bytes.length; i+=CHUNK) {
+    const chunk = bytes.slice(i, i+CHUNK);
+    if (char.properties.writeWithoutResponse) await char.writeValueWithoutResponse(chunk);
+    else await char.writeValue(chunk);
+    await new Promise(r=>setTimeout(r,30));
+  }
+  onStatus("Selesai! ✅");
+  await device.gatt.disconnect();
+}
+
+// ══════════════════════════════════════════════════════════════
+// PDF / HTML print (fallback universal — semua device & browser)
+// ══════════════════════════════════════════════════════════════
+function buildReceiptHTML(tx, tmpl, dapur) {
+  const tgl = new Date(tx.tanggal);
+  const tglStr = tgl.toLocaleDateString("id-ID",{weekday:"long",day:"2-digit",month:"long",year:"numeric"});
+  const wktStr = tgl.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"});
+  const w = tmpl.ukuranKertas==="80mm" ? "370px" : "270px";
+  const isKorporat = tmpl.style==="korporat";
+  const namaToko = tmpl.namaToko || "Koperasi ISS";
+  const logoTag = tmpl.logo ? `<img src="${tmpl.logo}" style="height:${tmpl.style==='logo'?60:44}px;display:block;margin:0 auto 5px;" alt="logo"/>` : "";
+
+  const headerDefault = `
+    ${tmpl.style==="logo"?logoTag:""}
+    <div style="text-align:center;font-weight:bold;font-size:14px;">${namaToko}</div>
+    <div style="text-align:center;font-size:11px;">SPPG ${dapur.label}</div>
+    ${tmpl.alamat?`<div style="text-align:center;font-size:10px;">${tmpl.alamat}</div>`:""}
+    ${tmpl.telepon?`<div style="text-align:center;font-size:10px;">Telp: ${tmpl.telepon}</div>`:""}`;
+  const headerKorporat = `<div style="border:2px solid #000;padding:8px;text-align:center;margin-bottom:4px;">
+    ${tmpl.logo?`<img src="${tmpl.logo}" style="height:40px;margin-bottom:4px;" alt="logo"/>`:""}
+    <div style="font-weight:bold;font-size:13px;letter-spacing:0.5px;">${namaToko.toUpperCase()}</div>
+    <div style="font-size:10px;">SPPG ${dapur.label}</div>
+    ${tmpl.alamat?`<div style="font-size:9px;">${tmpl.alamat}</div>`:""}
+    ${tmpl.telepon?`<div style="font-size:9px;">Telp: ${tmpl.telepon}</div>`:""}
+  </div>`;
+  const header = isKorporat ? headerKorporat : headerDefault;
+
+  const itemsDefault = tx.items.map(i=>`
+    <div style="font-size:11px;">${i.nama}</div>
+    <div style="display:flex;justify-content:space-between;padding-left:8px;font-size:10px;color:#444;">
+      <span>${i.qty} ${i.satuan} × Rp ${fmt(i.harga)}</span><span>Rp ${fmt(i.qty*i.harga)}</span>
+    </div>`).join("");
+  const itemsTable = `<table style="width:100%;border-collapse:collapse;font-size:10px;margin-top:3px;">
+    <tr style="border-bottom:1px solid #000;font-weight:bold;">
+      <th style="text-align:left;padding:2px 3px;">Nama Barang</th><th style="text-align:center;padding:2px;">Qty</th><th style="text-align:right;padding:2px;">Total</th>
+    </tr>
+    ${tx.items.map(i=>`<tr style="border-bottom:0.5px dashed #ccc;">
+      <td style="padding:2px 3px;">${i.nama}</td><td style="text-align:center;padding:2px;">${i.qty} ${i.satuan}</td><td style="text-align:right;padding:2px;">Rp ${fmt(i.qty*i.harga)}</td>
+    </tr>`).join("")}</table>`;
+  const itemsCompact = tx.items.map(i=>`
+    <div style="display:flex;justify-content:space-between;font-size:10px;">
+      <span>${i.nama} (${i.qty} ${i.satuan})</span><span>Rp ${fmt(i.qty*i.harga)}</span>
+    </div>`).join("");
+  const itemRows = tmpl.style==="korporat" ? itemsTable : tmpl.style==="simpel" ? itemsCompact : itemsDefault;
+  const sepType = isKorporat ? "solid" : "dashed";
+  const sep = (t=sepType) => `<div style="border-top:1px ${t} #000;margin:6px 0;"></div>`;
+
+  const metaRows = `
+    ${tmpl.showNomor?`<div style="display:flex;justify-content:space-between;font-size:10px;"><span>No. Dokumen</span><span>${tx.id}</span></div>`:""}
+    ${tmpl.showTanggal?`<div style="display:flex;justify-content:space-between;font-size:10px;"><span>Tanggal</span><span>${tglStr}</span></div>`:""}
+    ${tmpl.showTanggal?`<div style="display:flex;justify-content:space-between;font-size:10px;"><span>Waktu</span><span>${wktStr}</span></div>`:""}`;
+  const penerimaBaris = tmpl.showPenerima ? `${sep()}<div style="display:flex;justify-content:space-between;font-size:10px;"><span>Penerima</span><span style="border-bottom:1px solid #000;min-width:110px;">&nbsp;</span></div>` : "";
+  const ttdSection = tmpl.showTtd ? `
+    <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:10px;">
+      <div style="text-align:center;width:${tmpl.showStempel?"30%":"45%"};"><div>Diserahkan,</div><div style="height:32px;border-bottom:1px solid #000;margin:4px 0;"></div><div>(...................)</div></div>
+      ${tmpl.showStempel?`<div style="text-align:center;width:30%;"><div>Mengetahui,</div><div style="height:32px;border:1px dashed #999;margin:4px 0;display:flex;align-items:center;justify-content:center;font-size:8px;color:#999;">cap/stempel</div><div>(...................)</div></div>`:""}
+      <div style="text-align:center;width:${tmpl.showStempel?"30%":"45%"};"><div>Diterima,</div><div style="height:32px;border-bottom:1px solid #000;margin:4px 0;"></div><div>(...................)</div></div>
+    </div>` : "";
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <style>@page{margin:0;size:${tmpl.ukuranKertas} auto;}*{box-sizing:border-box;}body{font-family:'Courier New',monospace;width:${w};margin:0 auto;padding:14px 10px;line-height:1.5;}</style>
+  </head><body>
+  ${header}${sep()}
+  <div style="text-align:center;font-weight:bold;font-size:12px;">${tmpl.judulDokumen}</div>${sep()}
+  ${metaRows}${sep()}${itemRows}${sep()}
+  ${tx.diskon>0?`<div style="display:flex;justify-content:space-between;font-size:10px;"><span>Subtotal</span><span>Rp ${fmt(tx.subtotal)}</span></div>`:""}
+  ${tx.diskon>0?`<div style="display:flex;justify-content:space-between;font-size:10px;"><span>Diskon</span><span>- Rp ${fmt(tx.diskon)}</span></div>`:""}
+  <div style="display:flex;justify-content:space-between;font-weight:bold;font-size:13px;"><span>TOTAL</span><span>Rp ${fmt(tx.total)}</span></div>
+  ${penerimaBaris}${ttdSection}
+  ${tmpl.catatan?`${sep()}<div style="text-align:center;font-size:9px;">${tmpl.catatan}</div>`:""}
+  ${tmpl.footer?`${sep()}<div style="text-align:center;font-size:9px;">${tmpl.footer}</div>`:""}
+  </body></html>`;
+}
+
+// ══════════════════════════════════════════════════════════════
+// UI COMPONENTS
+// ══════════════════════════════════════════════════════════════
+const Toggle = ({value,onChange}) => (
+  <button onClick={()=>onChange(!value)} style={{width:42,height:22,borderRadius:99,border:"none",cursor:"pointer",background:value?"#1e3a8a":"#cbd5e1",position:"relative",transition:"background 0.2s",flexShrink:0}}>
+    <span style={{position:"absolute",top:2,left:value?20:2,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left 0.2s",display:"block"}}/>
+  </button>
+);
+const Field = ({label,children}) => (<div><label style={{fontSize:11,color:"#64748b",display:"block",marginBottom:3}}>{label}</label>{children}</div>);
+const Inp = ({label,...p}) => (<Field label={label}><input {...p} style={{width:"100%",padding:"8px 11px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:13,outline:"none",...p.style}}/></Field>);
+const Sel = ({label,options,value,onChange}) => (
+  <Field label={label}>
+    <select value={value} onChange={e=>onChange(e.target.value)} style={{width:"100%",padding:"8px 11px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:13,background:"#fff",outline:"none"}}>
+      {options.map(o=><option key={o} value={o}>{o}</option>)}
+    </select>
+  </Field>
+);
+
+const ReceiptPrev = ({tx,tmpl,dapur}) => {
+  const items = tx ? tx.items : [{nama:"Contoh Barang",qty:1,satuan:"pcs",harga:10000}];
+  const total = tx ? tx.total : items.reduce((s,i)=>s+i.qty*i.harga,0);
+  const w = tmpl.ukuranKertas==="80mm" ? 258 : 196;
+  const isKorporat = tmpl.style==="korporat", isLogo = tmpl.style==="logo", isSimpel = tmpl.style==="simpel";
+  const dash = <hr style={{border:"none",borderTop:"1px dashed #000",margin:"5px 0"}}/>;
+  const solid = <hr style={{border:"none",borderTop:"1px solid #000",margin:"5px 0"}}/>;
+  const namaToko = tmpl.namaToko || "Koperasi ISS";
+  return (
+    <div style={{background:"#fff",width:w,padding:"12px 10px",fontFamily:"'Courier New',monospace",fontSize:10,lineHeight:1.5,border:"1px solid #ddd",boxShadow:"2px 4px 12px rgba(0,0,0,0.1)",margin:"0 auto"}}>
+      {isKorporat ? (
+        <div style={{border:"1.5px solid #000",padding:"8px",textAlign:"center",marginBottom:4}}>
+          {tmpl.logo && <img src={tmpl.logo} style={{height:32,marginBottom:3}} alt="logo"/>}
+          <div style={{fontWeight:"bold",fontSize:11}}>{namaToko.toUpperCase()}</div>
+          <div style={{fontSize:9}}>SPPG {dapur?.label}</div>
+          {tmpl.alamat && <div style={{fontSize:8}}>{tmpl.alamat}</div>}
+        </div>
+      ) : (
+        <div>
+          {isLogo && tmpl.logo && <img src={tmpl.logo} style={{height:38,display:"block",margin:"0 auto 4px"}} alt="logo"/>}
+          <div style={{textAlign:"center",fontWeight:"bold",fontSize:11}}>{namaToko}</div>
+          <div style={{textAlign:"center",fontSize:9}}>SPPG {dapur?.label}</div>
+          {tmpl.alamat && <div style={{textAlign:"center",fontSize:8}}>{tmpl.alamat}</div>}
+        </div>
+      )}
+      {isKorporat?solid:dash}
+      <div style={{textAlign:"center",fontWeight:"bold",fontSize:10}}>{tmpl.judulDokumen}</div>
+      {isKorporat?solid:dash}
+      {tmpl.showNomor && <div style={{display:"flex",justifyContent:"space-between",fontSize:8}}><span>No.</span><span>{tx?.id||`${dapur?.kode||"XXX"}/20260812/0001`}</span></div>}
+      {tmpl.showTanggal && <div style={{display:"flex",justifyContent:"space-between",fontSize:8}}><span>Tanggal</span><span>{new Date(tx?.tanggal||Date.now()).toLocaleDateString("id-ID")}</span></div>}
+      {dash}
+      {isKorporat ? (
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:8}}>
+          <thead><tr style={{borderBottom:"0.5px solid #000"}}><th style={{textAlign:"left",padding:"1px 2px"}}>Barang</th><th style={{textAlign:"center",padding:"1px"}}>Qty</th><th style={{textAlign:"right",padding:"1px"}}>Total</th></tr></thead>
+          <tbody>{items.map((it,i)=>(<tr key={i} style={{borderBottom:"0.5px dashed #ccc"}}><td style={{padding:"1px 2px",fontSize:8}}>{it.nama}</td><td style={{textAlign:"center",padding:"1px",fontSize:8}}>{it.qty} {it.satuan}</td><td style={{textAlign:"right",padding:"1px",fontSize:8}}>Rp {fmt(it.qty*it.harga)}</td></tr>))}</tbody>
+        </table>
+      ) : isSimpel ? (
+        items.map((it,i)=>(<div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:9}}><span>{it.nama} ({it.qty} {it.satuan})</span><span>Rp {fmt(it.qty*it.harga)}</span></div>))
+      ) : (
+        items.map((it,i)=>(<div key={i} style={{marginBottom:3}}><div style={{fontSize:10}}>{it.nama}</div><div style={{display:"flex",justifyContent:"space-between",paddingLeft:6,fontSize:8,color:"#555"}}><span>{it.qty} {it.satuan} × Rp {fmt(it.harga)}</span><span>Rp {fmt(it.qty*it.harga)}</span></div></div>))
+      )}
+      {dash}
+      <div style={{display:"flex",justifyContent:"space-between",fontWeight:"bold",fontSize:11}}><span>TOTAL</span><span>Rp {fmt(total)}</span></div>
+      {tmpl.showPenerima && <>{dash}<div style={{display:"flex",justifyContent:"space-between",fontSize:8}}><span>Penerima</span><span style={{borderBottom:"0.5px solid #000",minWidth:80}}>&nbsp;</span></div></>}
+      {tmpl.showTtd && (
+        <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:7.5,gap:2}}>
+          <div style={{textAlign:"center",flex:1}}><div>Diserahkan,</div><div style={{height:18,borderBottom:"0.5px solid #000",margin:"3px 0"}}/><div>(.........)</div></div>
+          {tmpl.showStempel && (<div style={{textAlign:"center",flex:1}}><div>Mengetahui,</div><div style={{height:18,border:"0.5px dashed #999",margin:"3px 0",fontSize:6,color:"#999",display:"flex",alignItems:"center",justifyContent:"center"}}>cap</div><div>(.........)</div></div>)}
+          <div style={{textAlign:"center",flex:1}}><div>Diterima,</div><div style={{height:18,borderBottom:"0.5px solid #000",margin:"3px 0"}}/><div>(.........)</div></div>
+        </div>
+      )}
+      {tmpl.footer && <>{dash}<div style={{textAlign:"center",fontSize:8}}>{tmpl.footer}</div></>}
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════
+// MAIN APP
+// ══════════════════════════════════════════════════════════════
+function App() {
+  const [dapur,setDapur]=useState(null);
+  const [step,setStep]=useState("pick");
+  const [picked,setPicked]=useState(null);
+  const [pin,setPin]=useState("");
+  const [pinErr,setPinErr]=useState("");
+
+  const [loading,setLoading]=useState(false);
+  const [tab,setTab]=useState("transaksi");
+  const [catalog,setCatalog]=useState([]);
+  const [cats,setCats]=useState([]);
+  const [template,setTemplate]=useState(INIT_TPL);
+  const [cart,setCart]=useState([]);
+  const [diskon,setDiskon]=useState(0);
+  const [search,setSearch]=useState("");
+  const [katFil,setKatFil]=useState("Semua");
+  const [history,setHistory]=useState([]);
+  const [showModal,setShowModal]=useState(false);
+  const [lastTx,setLastTx]=useState(null);
+  const [printStatus,setPrintStatus]=useState("");
+
+  const [catForm,setCatForm]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [fNama,setFNama]=useState("");
+  const [fHarga,setFHarga]=useState("");
+  const [fSatuan,setFSatuan]=useState("pcs");
+  const [fSatuanC,setFSatuanC]=useState("");
+  const [fKat,setFKat]=useState("ATK");
+  const [newKat,setNewKat]=useState("");
+  const logoRef = useRef(null);
+
+  // ── Load data setelah login ──
+  useEffect(() => {
+    if (!dapur) return;
+    setLoading(true);
+    apiGet({action:"getAll", dapur:dapur.kode}).then(res=>{
+      if (res.error) { alert("Gagal memuat data: "+res.error); setLoading(false); return; }
+      setCatalog(res.katalog||[]);
+      setCats(res.kategori||["ATK","Alat Kebersihan","Barang Habis Pakai","APD"]);
+      setHistory(res.transaksi||[]);
+      if (res.template) setTemplate(p=>({...INIT_TPL,...res.template}));
+      else setTemplate(p=>({...INIT_TPL, namaToko:"Koperasi ISS"}));
+      setLoading(false);
+    }).catch(err=>{ alert("Gagal terhubung ke server: "+err); setLoading(false); });
+  }, [dapur]);
+
+  const doLogin = () => {
+    if (pin==="1234"||pin==="0000") setDapur(picked);
+    else setPinErr("PIN salah. Coba lagi.");
+  };
+
+  const addItem = (item) => setCart(p=>{
+    const ex=p.find(c=>c.id===item.id);
+    return ex ? p.map(c=>c.id===item.id?{...c,qty:c.qty+1}:c) : [...p,{...item,qty:1}];
+  });
+  const setQty = (id,qty) => setCart(p=>qty<=0?p.filter(c=>c.id!==id):p.map(c=>c.id===id?{...c,qty}:c));
+  const subtotal = cart.reduce((s,i)=>s+i.harga*i.qty,0);
+  const totalDiskon = Math.min(Number(diskon)||0,subtotal);
+  const total = subtotal-totalDiskon;
+
+  const checkout = async () => {
+    if(!cart.length) return;
+    const tx = {id:genNo(dapur.kode),tanggal:new Date().toISOString(),items:[...cart],subtotal,diskon:totalDiskon,total};
+    setLastTx(tx); setShowModal(true);
+    apiPost({action:"addTransaksi", dapur:dapur.kode, transaksi:tx}).then(res=>{
+      if(!res.error) setHistory(p=>[tx,...p]);
+    });
+  };
+  const newTx = () => { setCart([]); setDiskon(0); setShowModal(false); setLastTx(null); setPrintStatus(""); };
+
+  // ── Cetak: Bluetooth langsung, fallback ke print dialog ──
+  const doPrintBluetooth = async (tx) => {
+    try {
+      setPrintStatus("Menyiapkan...");
+      const bytes = encodeReceiptESCPOS(tx, template, dapur);
+      await printViaBluetooth(bytes, setPrintStatus);
+    } catch (err) {
+      setPrintStatus("");
+      alert("Gagal cetak Bluetooth: " + err.message + "\n\nSilakan gunakan opsi 'Simpan PDF' sebagai alternatif, atau pastikan printer sudah menyala & dalam mode pairing.");
+    }
+  };
+  const doPrintOrPDF = (tx) => {
+    const html = buildReceiptHTML(tx, template, dapur);
+    const blob = new Blob([html],{type:"text/html"});
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url,"_blank","width=440,height=660");
+    if(win) setTimeout(()=>{win.focus();win.print();},700);
+  };
+
+  // ── Katalog CRUD (sinkron ke Sheets) ──
+  const allKats = ["Semua",...cats];
+  const filtered = catalog.filter(i=>(katFil==="Semua"||i.kategori===katFil)&&i.nama.toLowerCase().includes(search.toLowerCase()));
+  const openForm = (item=null) => {
+    setEditId(item?.id||null);
+    setFNama(item?.nama||""); setFHarga(item?String(item.harga):"");
+    const isSat = item && SATUAN_STD.includes(item.satuan) && item.satuan!=="Lainnya...";
+    setFSatuan(isSat?(item?.satuan||"pcs"):"Lainnya..."); setFSatuanC(isSat?"":item?.satuan||"");
+    setFKat(item?.kategori||cats[0]||"ATK"); setCatForm(true);
+  };
+  const saveItem = async () => {
+    if(!fNama||!fHarga) return;
+    const sat = fSatuan==="Lainnya..."?fSatuanC:fSatuan;
+    const id = editId || Date.now();
+    const item = {id, nama:fNama, harga:Number(fHarga), satuan:sat, kategori:fKat};
+    setCatalog(p=> editId ? p.map(i=>i.id===editId?item:i) : [...p,item]);
+    setCatForm(false);
+    await apiPost({action:"upsertKatalogItem", item});
+  };
+  const deleteItem = async (id) => {
+    setCatalog(p=>p.filter(i=>i.id!==id));
+    await apiPost({action:"deleteKatalogItem", id});
+  };
+  const addKat = async () => {
+    const k=newKat.trim();
+    if(k&&!cats.includes(k)){ setCats(p=>[...p,k]); setNewKat(""); await apiPost({action:"addKategori", nama:k}); }
+  };
+
+  const handleLogo = (e) => {
+    const file=e.target.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=(ev)=>setTemplate(p=>({...p,logo:ev.target.result}));
+    reader.readAsDataURL(file);
+  };
+  const setTpl = (k,v) => setTemplate(p=>({...p,[k]:v}));
+  const applyStyle = (styleId) => setTemplate(p=>({...p, style:styleId, ...STYLE_PRESET[styleId]}));
+  const saveTemplate = async () => {
+    await apiPost({action:"upsertTemplate", dapur:dapur.kode, template});
+    alert("Template tersimpan!");
+  };
+
+  // ══════════════════════════════════════════ LOGIN
+  if(!dapur) return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0f2057,#1e3a8a,#1d4ed8)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:"#fff",borderRadius:20,padding:"32px 24px",width:"100%",maxWidth:420,boxShadow:"0 24px 64px rgba(0,0,0,0.35)"}}>
+        {step==="pick"?(
+          <>
+            <div style={{textAlign:"center",marginBottom:24}}>
+              <div style={{fontSize:48,marginBottom:8}}>🖨️</div>
+              <h1 style={{fontSize:22,fontWeight:"bold",color:"#1e3a8a",margin:"0 0 4px"}}>Cetak Struk Operasional</h1>
+              <p style={{color:"#64748b",fontSize:13,margin:0}}>Koperasi ISS • Sarana & Prasarana MBG</p>
+            </div>
+            <p style={{fontSize:12,fontWeight:600,color:"#374151",marginBottom:12}}>Pilih SPPG Dapur:</p>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              {DAPUR_LIST.map(d=>(
+                <button key={d.id} onClick={()=>{setPicked(d);setStep("pin");setPin("");setPinErr("");}}
+                  style={{background:"#f0f9ff",border:"2px solid #bae6fd",borderRadius:12,padding:"18px 10px",cursor:"pointer",textAlign:"center"}}>
+                  <div style={{fontSize:28,marginBottom:6}}>{d.emoji}</div>
+                  <div style={{fontSize:10,color:"#64748b",fontWeight:500}}>SPPG</div>
+                  <div style={{fontSize:13,fontWeight:"bold",color:"#1e3a8a"}}>{d.label}</div>
+                </button>
+              ))}
+            </div>
+          </>
+        ):(
+          <>
+            <button onClick={()=>setStep("pick")} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:13,marginBottom:16,padding:0}}>← Kembali</button>
+            <div style={{textAlign:"center",marginBottom:24}}>
+              <div style={{fontSize:36,marginBottom:8}}>{picked?.emoji}</div>
+              <h2 style={{fontSize:18,fontWeight:"bold",color:"#1e3a8a",margin:"0 0 4px"}}>SPPG {picked?.label}</h2>
+              <p style={{color:"#64748b",fontSize:13,margin:0}}>Masukkan PIN untuk lanjut</p>
+            </div>
+            <input type="password" placeholder="••••" value={pin}
+              onChange={e=>{setPin(e.target.value);setPinErr("");}} onKeyDown={e=>e.key==="Enter"&&doLogin()}
+              style={{width:"100%",padding:14,border:"2px solid #e2e8f0",borderRadius:10,fontSize:20,textAlign:"center",letterSpacing:8,marginBottom:6,outline:"none"}}/>
+            {pinErr&&<p style={{color:"#ef4444",fontSize:12,textAlign:"center",margin:"0 0 6px"}}>{pinErr}</p>}
+            <p style={{color:"#94a3b8",fontSize:11,textAlign:"center",margin:"0 0 14px"}}>Demo: Kasir = <b>1234</b> | Admin = <b>0000</b></p>
+            <button onClick={doLogin} style={{width:"100%",background:"#1e3a8a",color:"#fff",border:"none",borderRadius:10,padding:14,fontSize:15,fontWeight:"bold",cursor:"pointer"}}>Masuk →</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  const TABS=[{id:"transaksi",icon:"🛒",label:"Transaksi"},{id:"katalog",icon:"📦",label:"Katalog"},{id:"template",icon:"🎨",label:"Template"},{id:"riwayat",icon:"📊",label:"Riwayat"}];
+
+  return (
+    <div style={{minHeight:"100vh",background:"#f1f5f9",fontFamily:"'Segoe UI',Arial,sans-serif"}}>
+      <div style={{background:"#1e3a8a",color:"#fff",padding:"11px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:"bold"}}>🖨️ Struk Operasional</div>
+          <div style={{fontSize:11,color:"#93c5fd"}}>{dapur.emoji} SPPG {dapur.label} {loading&&"· memuat..."}</div>
+        </div>
+        <button onClick={()=>{setDapur(null);setStep("pick");newTx();}} style={{background:"rgba(255,255,255,0.12)",border:"1px solid rgba(255,255,255,0.25)",color:"#fff",borderRadius:8,padding:"5px 11px",cursor:"pointer",fontSize:12}}>Ganti Dapur</button>
+      </div>
+
+      <div style={{background:"#fff",borderBottom:"1px solid #e2e8f0",display:"flex",position:"sticky",top:48,zIndex:99}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"10px 4px",border:"none",cursor:"pointer",fontSize:10,fontWeight:tab===t.id?"bold":"normal",background:tab===t.id?"#eff6ff":"#fff",color:tab===t.id?"#1e3a8a":"#64748b",borderBottom:tab===t.id?"3px solid #1e3a8a":"3px solid transparent"}}>
+            <div style={{fontSize:16,marginBottom:1}}>{t.icon}</div>{t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{padding:14,maxWidth:820,margin:"0 auto"}}>
+        {tab==="transaksi" && (
+          <div>
+            <input placeholder="🔍 Cari barang..." value={search} onChange={e=>setSearch(e.target.value)} style={{width:"100%",padding:"9px 13px",border:"1.5px solid #e2e8f0",borderRadius:10,fontSize:13,marginBottom:10,outline:"none"}}/>
+            <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:12}}>
+              {allKats.map(k=>(<button key={k} onClick={()=>setKatFil(k)} style={{whiteSpace:"nowrap",padding:"4px 11px",borderRadius:99,border:"1.5px solid",fontSize:11,cursor:"pointer",fontWeight:500,background:katFil===k?"#1e3a8a":"#fff",borderColor:katFil===k?"#1e3a8a":"#e2e8f0",color:katFil===k?"#fff":"#64748b"}}>{KAT_ICON[k]||"🏪"} {k}</button>))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8,marginBottom:14}}>
+              {filtered.map(item=>{
+                const inCart=cart.find(c=>c.id===item.id);
+                return (
+                  <button key={item.id} onClick={()=>addItem(item)} style={{background:"#fff",border:`1.5px solid ${inCart?"#1e3a8a":"#e2e8f0"}`,borderRadius:10,padding:10,textAlign:"left",cursor:"pointer",position:"relative"}}>
+                    <div style={{fontSize:9,color:"#94a3b8",marginBottom:2}}>{KAT_ICON[item.kategori]||"📦"} {item.kategori}</div>
+                    <div style={{fontSize:12,fontWeight:600,color:"#1e293b",marginBottom:4,lineHeight:1.3}}>{item.nama}</div>
+                    <div style={{fontSize:13,fontWeight:"bold",color:"#1e3a8a"}}>Rp {fmt(item.harga)}</div>
+                    <div style={{fontSize:9,color:"#94a3b8"}}>/{item.satuan}</div>
+                    {inCart&&<div style={{position:"absolute",top:5,right:5,background:"#1e3a8a",color:"#fff",borderRadius:99,width:19,height:19,fontSize:10,fontWeight:"bold",display:"flex",alignItems:"center",justifyContent:"center"}}>{inCart.qty}</div>}
+                  </button>
+                );
+              })}
+            </div>
+            {cart.length>0?(
+              <div style={{background:"#fff",borderRadius:14,border:"1.5px solid #e2e8f0",padding:16}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <h3 style={{fontSize:14,fontWeight:"bold",margin:0}}>🛒 Keranjang ({cart.length} jenis)</h3>
+                  <button onClick={newTx} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:12}}>Kosongkan</button>
+                </div>
+                {cart.map(item=>(
+                  <div key={item.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:"1px solid #f1f5f9"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.nama}</div>
+                      <div style={{fontSize:11,color:"#64748b"}}>Rp {fmt(item.harga)} / {item.satuan}</div>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:5}}>
+                      <button onClick={()=>setQty(item.id,item.qty-1)} style={{width:25,height:25,borderRadius:"50%",border:"1.5px solid #e2e8f0",background:"#fff",cursor:"pointer",fontSize:14,fontWeight:"bold"}}>−</button>
+                      <span style={{fontSize:13,fontWeight:"bold",minWidth:18,textAlign:"center"}}>{item.qty}</span>
+                      <button onClick={()=>setQty(item.id,item.qty+1)} style={{width:25,height:25,borderRadius:"50%",background:"#1e3a8a",border:"none",color:"#fff",cursor:"pointer",fontSize:14,fontWeight:"bold"}}>+</button>
+                    </div>
+                    <div style={{fontSize:13,fontWeight:600,color:"#1e3a8a",minWidth:68,textAlign:"right"}}>Rp {fmt(item.qty*item.harga)}</div>
+                  </div>
+                ))}
+                <div style={{marginTop:10,display:"flex",alignItems:"center",gap:8}}>
+                  <label style={{fontSize:12,color:"#64748b",whiteSpace:"nowrap"}}>Diskon (Rp):</label>
+                  <input type="number" value={diskon} onChange={e=>setDiskon(e.target.value)} placeholder="0" style={{flex:1,padding:"7px 10px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:13,outline:"none"}}/>
+                </div>
+                <div style={{marginTop:12,paddingTop:12,borderTop:"1px dashed #e2e8f0"}}>
+                  {totalDiskon>0&&<>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#64748b",marginBottom:3}}><span>Subtotal</span><span>Rp {fmt(subtotal)}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#ef4444",marginBottom:3}}><span>Diskon</span><span>− Rp {fmt(totalDiskon)}</span></div>
+                  </>}
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:18,fontWeight:"bold",color:"#1e3a8a"}}><span>TOTAL</span><span>Rp {fmt(total)}</span></div>
+                </div>
+                <button onClick={checkout} style={{width:"100%",marginTop:14,background:"linear-gradient(135deg,#1e3a8a,#2563eb)",color:"#fff",border:"none",borderRadius:10,padding:14,fontSize:15,fontWeight:"bold",cursor:"pointer",boxShadow:"0 4px 14px rgba(30,58,138,0.28)"}}>Buat Struk →</button>
+              </div>
+            ):(
+              <div style={{textAlign:"center",color:"#94a3b8",padding:"32px 0",background:"#fff",borderRadius:14,border:"1.5px dashed #e2e8f0"}}>
+                <div style={{fontSize:40,marginBottom:8}}>📋</div>
+                <div style={{fontSize:14}}>Ketuk item di atas untuk menambah</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab==="katalog" && (
+          <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <h2 style={{fontSize:16,fontWeight:"bold",margin:0}}>📦 Katalog Barang ({catalog.length})</h2>
+              <button onClick={()=>openForm()} style={{background:"#1e3a8a",color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",cursor:"pointer",fontSize:12,fontWeight:600}}>+ Tambah</button>
+            </div>
+            <div style={{background:"#fff",borderRadius:10,border:"1px solid #e2e8f0",padding:"10px 14px",marginBottom:10}}>
+              <p style={{fontSize:11,color:"#64748b",margin:"0 0 8px",fontWeight:600}}>Kategori aktif:</p>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+                {cats.map(k=>(<span key={k} style={{background:"#eff6ff",color:"#1e3a8a",borderRadius:99,padding:"3px 10px",fontSize:11,fontWeight:500}}>{KAT_ICON[k]||"📦"} {k}</span>))}
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <input placeholder="+ Tambah kategori baru..." value={newKat} onChange={e=>setNewKat(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addKat()} style={{flex:1,padding:"6px 10px",border:"1.5px solid #e2e8f0",borderRadius:7,fontSize:12,outline:"none"}}/>
+                <button onClick={addKat} style={{background:"#1e3a8a",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",cursor:"pointer",fontSize:12}}>+ Tambah</button>
+              </div>
+            </div>
+            {catForm && (
+              <div style={{background:"#fff",borderRadius:12,border:"1.5px solid #bfdbfe",padding:16,marginBottom:12}}>
+                <h3 style={{fontSize:14,fontWeight:"bold",margin:"0 0 12px"}}>{editId?"✏️ Edit Barang":"➕ Tambah Barang Baru"}</h3>
+                <div style={{display:"grid",gap:10}}>
+                  <Inp label="Nama Barang" placeholder="cth. Kertas HVS A4 70gr" value={fNama} onChange={e=>setFNama(e.target.value)}/>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                    <Inp label="Harga Satuan (Rp)" type="number" placeholder="55000" value={fHarga} onChange={e=>setFHarga(e.target.value)}/>
+                    <div>
+                      <Sel label="Satuan" options={SATUAN_STD} value={fSatuan} onChange={setFSatuan}/>
+                      {fSatuan==="Lainnya..."&&(<input placeholder="Tulis satuan..." value={fSatuanC} onChange={e=>setFSatuanC(e.target.value)} style={{width:"100%",padding:"8px 11px",border:"1.5px solid #fbbf24",borderRadius:8,fontSize:13,outline:"none",marginTop:6}}/>)}
+                    </div>
+                  </div>
+                  <Sel label="Kategori" options={cats} value={fKat} onChange={setFKat}/>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={saveItem} style={{flex:1,background:"#1e3a8a",color:"#fff",border:"none",borderRadius:8,padding:10,cursor:"pointer",fontSize:13,fontWeight:"bold"}}>💾 Simpan</button>
+                    <button onClick={()=>{setCatForm(false);setEditId(null);}} style={{flex:1,background:"#f1f5f9",color:"#64748b",border:"none",borderRadius:8,padding:10,cursor:"pointer",fontSize:13}}>Batal</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div style={{display:"grid",gap:6}}>
+              {catalog.map(item=>(
+                <div key={item.id} style={{background:"#fff",borderRadius:10,padding:"11px 14px",border:"1px solid #e2e8f0",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600}}>{item.nama}</div>
+                    <div style={{fontSize:11,color:"#94a3b8"}}>{KAT_ICON[item.kategori]||"📦"} {item.kategori} · per {item.satuan}</div>
+                    <div style={{fontSize:14,fontWeight:"bold",color:"#1e3a8a"}}>Rp {fmt(item.harga)}</div>
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={()=>openForm(item)} style={{background:"#eff6ff",border:"none",color:"#1e3a8a",borderRadius:7,padding:"6px 10px",cursor:"pointer",fontSize:12}}>✏️</button>
+                    <button onClick={()=>deleteItem(item.id)} style={{background:"#fef2f2",border:"none",color:"#ef4444",borderRadius:7,padding:"6px 10px",cursor:"pointer",fontSize:12}}>🗑️</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {tab==="template" && (
+          <div style={{display:"grid",gap:12}}>
+            <h2 style={{fontSize:16,fontWeight:"bold",margin:0}}>🎨 Template Struk</h2>
+            <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16}}>
+              <p style={{fontSize:11,fontWeight:"bold",color:"#64748b",textTransform:"uppercase",letterSpacing:"0.05em",margin:"0 0 12px"}}>Pilih Gaya Template</p>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                {TMPL_INFO.map(t=>(
+                  <button key={t.id} onClick={()=>applyStyle(t.id)} style={{border:`2px solid ${template.style===t.id?"#1e3a8a":"#e2e8f0"}`,background:template.style===t.id?"#eff6ff":"#fafafa",borderRadius:10,padding:"12px 10px",cursor:"pointer",textAlign:"left"}}>
+                    <div style={{fontSize:22,marginBottom:4}}>{t.icon}</div>
+                    <div style={{fontSize:12,fontWeight:"bold",color:template.style===t.id?"#1e3a8a":"#1e293b"}}>{t.label}</div>
+                    <div style={{fontSize:10,color:"#64748b",marginTop:2}}>{t.desc}</div>
+                    {template.style===t.id&&<div style={{marginTop:4,fontSize:9,color:"#1e3a8a",fontWeight:"bold"}}>✓ Aktif</div>}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16}}>
+              <p style={{fontSize:11,fontWeight:"bold",color:"#64748b",textTransform:"uppercase",letterSpacing:"0.05em",margin:"0 0 12px"}}>Logo Toko / Instansi</p>
+              <input type="file" accept="image/*" ref={logoRef} onChange={handleLogo} style={{display:"none"}}/>
+              {template.logo ? (
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <img src={template.logo} style={{height:56,borderRadius:6,border:"1px solid #e2e8f0"}} alt="logo"/>
+                  <div>
+                    <div style={{fontSize:12,color:"#22c55e",fontWeight:600}}>✅ Logo terpasang</div>
+                    <div style={{display:"flex",gap:6,marginTop:4}}>
+                      <button onClick={()=>logoRef.current.click()} style={{background:"#eff6ff",border:"none",color:"#1e3a8a",borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11}}>Ganti</button>
+                      <button onClick={()=>setTpl("logo",null)} style={{background:"#fef2f2",border:"none",color:"#ef4444",borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11}}>Hapus</button>
+                    </div>
+                  </div>
+                </div>
+              ):(
+                <button onClick={()=>logoRef.current.click()} style={{width:"100%",padding:"18px",border:"2px dashed #e2e8f0",borderRadius:10,background:"#fafafa",cursor:"pointer",textAlign:"center",color:"#64748b"}}>
+                  <div style={{fontSize:28,marginBottom:4}}>🖼️</div>
+                  <div style={{fontSize:13,fontWeight:500}}>Klik untuk upload logo</div>
+                </button>
+              )}
+            </div>
+            <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16}}>
+              <p style={{fontSize:11,fontWeight:"bold",color:"#64748b",textTransform:"uppercase",letterSpacing:"0.05em",margin:"0 0 12px"}}>Informasi Instansi</p>
+              <div style={{display:"grid",gap:8}}>
+                {[{k:"namaToko",l:"Nama Instansi",ph:"Koperasi ISS"},{k:"alamat",l:"Alamat",ph:"Jl. ..., Bandung"},{k:"telepon",l:"Nomor Telepon",ph:"0812-3456-7890"},{k:"judulDokumen",l:"Judul Dokumen",ph:"BUKTI PERMINTAAN BARANG"},{k:"footer",l:"Keterangan Footer",ph:"Barang yang sudah dikeluarkan..."},{k:"catatan",l:"Catatan Tambahan",ph:"Opsional..."}].map(f=>(
+                  <Inp key={f.k} label={f.l} placeholder={f.ph} value={template[f.k]} onChange={e=>setTpl(f.k,e.target.value)}/>
+                ))}
+              </div>
+            </div>
+            <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16}}>
+              <p style={{fontSize:11,fontWeight:"bold",color:"#64748b",textTransform:"uppercase",letterSpacing:"0.05em",margin:"0 0 12px"}}>Pengaturan Cetak</p>
+              <div style={{display:"grid",gap:12}}>
+                {[{k:"showNomor",l:"Nomor Dokumen"},{k:"showTanggal",l:"Tanggal & Waktu"},{k:"showPenerima",l:"Kolom Penerima"},{k:"showTtd",l:"Tanda Terima (diserahkan/diterima)"},{k:"showStempel",l:"Cap/Stempel Mengetahui"}].map(s=>(
+                  <div key={s.k} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:13}}>{s.l}</span><Toggle value={template[s.k]} onChange={v=>setTpl(s.k,v)}/></div>
+                ))}
+                <div>
+                  <p style={{fontSize:11,color:"#64748b",margin:"0 0 6px"}}>Ukuran Kertas</p>
+                  <div style={{display:"flex",gap:8}}>
+                    {["58mm","80mm"].map(uk=>(<button key={uk} onClick={()=>setTpl("ukuranKertas",uk)} style={{flex:1,padding:"9px",border:"1.5px solid",cursor:"pointer",borderRadius:8,fontSize:12,fontWeight:500,borderColor:template.ukuranKertas===uk?"#1e3a8a":"#e2e8f0",background:template.ukuranKertas===uk?"#eff6ff":"#fff",color:template.ukuranKertas===uk?"#1e3a8a":"#64748b"}}>{uk}</button>))}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button onClick={saveTemplate} style={{background:"#1e3a8a",color:"#fff",border:"none",borderRadius:10,padding:12,cursor:"pointer",fontSize:14,fontWeight:"bold"}}>💾 Simpan Template ke Database</button>
+            <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16}}>
+              <p style={{fontSize:11,fontWeight:"bold",color:"#64748b",textTransform:"uppercase",letterSpacing:"0.05em",margin:"0 0 12px"}}>Preview — {TMPL_INFO.find(t=>t.id===template.style)?.label}</p>
+              <div style={{background:"#f8fafc",borderRadius:8,padding:14}}><ReceiptPrev tmpl={template} dapur={dapur}/></div>
+            </div>
+          </div>
+        )}
+
+        {tab==="riwayat" && (
+          <div>
+            <h2 style={{fontSize:16,fontWeight:"bold",margin:"0 0 12px"}}>📊 Riwayat — SPPG {dapur.label}</h2>
+            {history.length===0?(
+              <div style={{textAlign:"center",padding:"40px 0",background:"#fff",borderRadius:14,color:"#94a3b8"}}>
+                <div style={{fontSize:40,marginBottom:8}}>📋</div><div style={{fontSize:14}}>Belum ada transaksi</div>
+              </div>
+            ):(
+              <>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+                  <div style={{background:"#fff",borderRadius:10,padding:"12px 16px",border:"1px solid #e2e8f0",textAlign:"center"}}><div style={{fontSize:11,color:"#64748b"}}>Jumlah Struk</div><div style={{fontSize:22,fontWeight:"bold",color:"#1e3a8a"}}>{history.length}</div></div>
+                  <div style={{background:"#fff",borderRadius:10,padding:"12px 16px",border:"1px solid #e2e8f0",textAlign:"center"}}><div style={{fontSize:11,color:"#64748b"}}>Total Nilai</div><div style={{fontSize:16,fontWeight:"bold",color:"#059669"}}>Rp {fmt(history.reduce((s,tx)=>s+tx.total,0))}</div></div>
+                </div>
+                {history.map(tx=>(
+                  <div key={tx.id} style={{background:"#fff",borderRadius:10,padding:"12px 14px",border:"1px solid #e2e8f0",marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace"}}>{tx.id}</div>
+                        <div style={{fontSize:12,color:"#64748b"}}>{new Date(tx.tanggal).toLocaleString("id-ID")}</div>
+                        <div style={{fontSize:11,color:"#94a3b8",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.items.length} item: {tx.items.map(i=>i.nama).join(", ")}</div>
+                      </div>
+                      <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
+                        <div style={{fontSize:15,fontWeight:"bold",color:"#1e3a8a"}}>Rp {fmt(tx.total)}</div>
+                        <button onClick={()=>doPrintOrPDF(tx)} style={{marginTop:5,background:"#eff6ff",border:"none",color:"#1e3a8a",borderRadius:6,padding:"4px 10px",cursor:"pointer",fontSize:11}}>🖨️ Cetak Ulang</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {showModal && lastTx && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={e=>{if(e.target===e.currentTarget)setShowModal(false);}}>
+          <div style={{background:"#fff",width:"100%",maxWidth:480,borderRadius:"20px 20px 0 0",padding:"24px 20px",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 -8px 32px rgba(0,0,0,0.2)"}}>
+            <div style={{textAlign:"center",marginBottom:14}}>
+              <div style={{fontSize:40,marginBottom:6}}>✅</div>
+              <h3 style={{fontSize:18,fontWeight:"bold",color:"#1e293b",margin:"0 0 2px"}}>Struk Siap!</h3>
+              <p style={{fontSize:12,color:"#64748b",margin:0}}>Total: <strong style={{color:"#1e3a8a"}}>Rp {fmt(lastTx.total)}</strong> • {lastTx.items.length} jenis barang</p>
+            </div>
+            <div style={{background:"#f8fafc",borderRadius:12,padding:12,marginBottom:14,border:"1px solid #e2e8f0"}}><ReceiptPrev tx={lastTx} tmpl={template} dapur={dapur}/></div>
+            <p style={{fontSize:11,color:"#94a3b8",textAlign:"center",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em",margin:"0 0 10px"}}>Pilih Aksi</p>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+              <button onClick={()=>doPrintBluetooth(lastTx)} style={{background:"linear-gradient(135deg,#1e3a8a,#2563eb)",color:"#fff",border:"none",borderRadius:12,padding:"16px 10px",cursor:"pointer",textAlign:"center",boxShadow:"0 4px 14px rgba(30,58,138,0.3)"}}>
+                <div style={{fontSize:26,marginBottom:4}}>🖨️</div><div style={{fontSize:14,fontWeight:"bold"}}>Cetak</div><div style={{fontSize:10,opacity:0.85,marginTop:1}}>Bluetooth Printer</div>
+              </button>
+              <button onClick={()=>doPrintOrPDF(lastTx)} style={{background:"linear-gradient(135deg,#065f46,#059669)",color:"#fff",border:"none",borderRadius:12,padding:"16px 10px",cursor:"pointer",textAlign:"center",boxShadow:"0 4px 14px rgba(5,150,105,0.28)"}}>
+                <div style={{fontSize:26,marginBottom:4}}>📄</div><div style={{fontSize:14,fontWeight:"bold"}}>Simpan PDF</div><div style={{fontSize:10,opacity:0.85,marginTop:1}}>Pilih "Save as PDF"</div>
+              </button>
+            </div>
+            {printStatus && <div style={{textAlign:"center",fontSize:12,color:"#1e3a8a",marginBottom:10}}>⏳ {printStatus}</div>}
+            <div style={{background:"#fefce8",border:"1px solid #fde68a",borderRadius:8,padding:"9px 12px",marginBottom:12,fontSize:11,color:"#854d0e"}}>
+              💡 <b>Cetak Bluetooth</b> langsung mengirim ke printer (Chrome Android/Desktop). Jika printer tidak terdeteksi atau browser tidak mendukung, gunakan <b>Simpan PDF</b>.
+            </div>
+            <button onClick={()=>{newTx();setTab("transaksi");}} style={{width:"100%",background:"#f1f5f9",color:"#475569",border:"none",borderRadius:12,padding:13,cursor:"pointer",fontSize:14,fontWeight:600}}>🛒 Transaksi Baru</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
