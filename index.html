@@ -38,6 +38,7 @@ const INIT_TPL = {
   namaToko:"Koperasi ISS", alamat:"", telepon:"", judulDokumen:"BUKTI PERMINTAAN BARANG",
   footer:"", catatan:"", ukuranKertas:"58mm",
   showTanggal:true, showNomor:true, showPenerima:false, showTtd:false, showStempel:false,
+  showAlamat:true, showTelepon:true, showJudul:true, showFooter:true, showCatatan:true,
   style:"simpel", logo:null,
 };
 const TMPL_INFO = [
@@ -97,11 +98,10 @@ function encodeReceiptESCPOS(tx, tmpl, dapur) {
   push(INIT); push(CENTER); push(BOLD_ON);
   text(tmpl.namaToko || "Koperasi ISS");
   push(BOLD_OFF);
-  text(`SPPG ${dapur.label}`);
-  if (tmpl.alamat) text(tmpl.alamat);
-  if (tmpl.telepon) text(`Telp: ${tmpl.telepon}`);
+  if (tmpl.showAlamat && tmpl.alamat) text(tmpl.alamat);
+  if (tmpl.showTelepon && tmpl.telepon) text(`Telp: ${tmpl.telepon}`);
   text(LINE);
-  push(BOLD_ON); text(tmpl.judulDokumen || "BUKTI PERMINTAAN BARANG"); push(BOLD_OFF);
+  if (tmpl.showJudul) { push(BOLD_ON); text(tmpl.judulDokumen || "BUKTI PERMINTAAN BARANG"); push(BOLD_OFF); }
   text(LINE);
   push(LEFT);
   if (tmpl.showNomor) text(`No: ${tx.id}`);
@@ -121,7 +121,8 @@ function encodeReceiptESCPOS(tx, tmpl, dapur) {
     text(""); text("Diserahkan,        Diterima,");
     text(""); text(""); text("(........)         (........)");
   }
-  if (tmpl.footer) { text(LINE); push(CENTER); text(tmpl.footer); push(LEFT); }
+  if (tmpl.showCatatan && tmpl.catatan) { text(LINE); push(CENTER); text(tmpl.catatan); push(LEFT); }
+  if (tmpl.showFooter && tmpl.footer) { text(LINE); push(CENTER); text(tmpl.footer); push(LEFT); }
   text(""); text(""); text("");
   push(CUT);
   return new Uint8Array(bytes);
@@ -186,15 +187,13 @@ function buildReceiptHTML(tx, tmpl, dapur) {
   const headerDefault = `
     ${tmpl.style==="logo"?logoTag:""}
     <div style="text-align:center;font-weight:bold;font-size:14px;">${namaToko}</div>
-    <div style="text-align:center;font-size:11px;">SPPG ${dapur.label}</div>
-    ${tmpl.alamat?`<div style="text-align:center;font-size:10px;">${tmpl.alamat}</div>`:""}
-    ${tmpl.telepon?`<div style="text-align:center;font-size:10px;">Telp: ${tmpl.telepon}</div>`:""}`;
+    ${tmpl.showAlamat&&tmpl.alamat?`<div style="text-align:center;font-size:10px;">${tmpl.alamat}</div>`:""}
+    ${tmpl.showTelepon&&tmpl.telepon?`<div style="text-align:center;font-size:10px;">Telp: ${tmpl.telepon}</div>`:""}`;
   const headerKorporat = `<div style="border:2px solid #000;padding:8px;text-align:center;margin-bottom:4px;">
     ${tmpl.logo?`<img src="${tmpl.logo}" style="height:40px;margin-bottom:4px;" alt="logo"/>`:""}
     <div style="font-weight:bold;font-size:13px;letter-spacing:0.5px;">${namaToko.toUpperCase()}</div>
-    <div style="font-size:10px;">SPPG ${dapur.label}</div>
-    ${tmpl.alamat?`<div style="font-size:9px;">${tmpl.alamat}</div>`:""}
-    ${tmpl.telepon?`<div style="font-size:9px;">Telp: ${tmpl.telepon}</div>`:""}
+    ${tmpl.showAlamat&&tmpl.alamat?`<div style="font-size:9px;">${tmpl.alamat}</div>`:""}
+    ${tmpl.showTelepon&&tmpl.telepon?`<div style="font-size:9px;">Telp: ${tmpl.telepon}</div>`:""}
   </div>`;
   const header = isKorporat ? headerKorporat : headerDefault;
 
@@ -234,14 +233,14 @@ function buildReceiptHTML(tx, tmpl, dapur) {
   <style>@page{margin:0;size:${tmpl.ukuranKertas} auto;}*{box-sizing:border-box;}body{font-family:'Courier New',monospace;width:${w};margin:0 auto;padding:14px 10px;line-height:1.5;}</style>
   </head><body>
   ${header}${sep()}
-  <div style="text-align:center;font-weight:bold;font-size:12px;">${tmpl.judulDokumen}</div>${sep()}
+  ${tmpl.showJudul?`<div style="text-align:center;font-weight:bold;font-size:12px;">${tmpl.judulDokumen}</div>${sep()}`:""}
   ${metaRows}${sep()}${itemRows}${sep()}
   ${tx.diskon>0?`<div style="display:flex;justify-content:space-between;font-size:10px;"><span>Subtotal</span><span>Rp ${fmt(tx.subtotal)}</span></div>`:""}
   ${tx.diskon>0?`<div style="display:flex;justify-content:space-between;font-size:10px;"><span>Diskon</span><span>- Rp ${fmt(tx.diskon)}</span></div>`:""}
   <div style="display:flex;justify-content:space-between;font-weight:bold;font-size:13px;"><span>TOTAL</span><span>Rp ${fmt(tx.total)}</span></div>
   ${penerimaBaris}${ttdSection}
-  ${tmpl.catatan?`${sep()}<div style="text-align:center;font-size:9px;">${tmpl.catatan}</div>`:""}
-  ${tmpl.footer?`${sep()}<div style="text-align:center;font-size:9px;">${tmpl.footer}</div>`:""}
+  ${tmpl.showCatatan&&tmpl.catatan?`${sep()}<div style="text-align:center;font-size:9px;">${tmpl.catatan}</div>`:""}
+  ${tmpl.showFooter&&tmpl.footer?`${sep()}<div style="text-align:center;font-size:9px;">${tmpl.footer}</div>`:""}
   </body></html>`;
 }
 
@@ -277,19 +276,19 @@ const ReceiptPrev = ({tx,tmpl,dapur}) => {
         <div style={{border:"1.5px solid #000",padding:"8px",textAlign:"center",marginBottom:4}}>
           {tmpl.logo && <img src={tmpl.logo} style={{height:32,marginBottom:3}} alt="logo"/>}
           <div style={{fontWeight:"bold",fontSize:11}}>{namaToko.toUpperCase()}</div>
-          <div style={{fontSize:9}}>SPPG {dapur?.label}</div>
-          {tmpl.alamat && <div style={{fontSize:8}}>{tmpl.alamat}</div>}
+          {tmpl.showAlamat && tmpl.alamat && <div style={{fontSize:8}}>{tmpl.alamat}</div>}
+          {tmpl.showTelepon && tmpl.telepon && <div style={{fontSize:8}}>Telp: {tmpl.telepon}</div>}
         </div>
       ) : (
         <div>
           {isLogo && tmpl.logo && <img src={tmpl.logo} style={{height:38,display:"block",margin:"0 auto 4px"}} alt="logo"/>}
           <div style={{textAlign:"center",fontWeight:"bold",fontSize:11}}>{namaToko}</div>
-          <div style={{textAlign:"center",fontSize:9}}>SPPG {dapur?.label}</div>
-          {tmpl.alamat && <div style={{textAlign:"center",fontSize:8}}>{tmpl.alamat}</div>}
+          {tmpl.showAlamat && tmpl.alamat && <div style={{textAlign:"center",fontSize:8}}>{tmpl.alamat}</div>}
+          {tmpl.showTelepon && tmpl.telepon && <div style={{textAlign:"center",fontSize:8}}>Telp: {tmpl.telepon}</div>}
         </div>
       )}
       {isKorporat?solid:dash}
-      <div style={{textAlign:"center",fontWeight:"bold",fontSize:10}}>{tmpl.judulDokumen}</div>
+      {tmpl.showJudul && <div style={{textAlign:"center",fontWeight:"bold",fontSize:10}}>{tmpl.judulDokumen}</div>}
       {isKorporat?solid:dash}
       {tmpl.showNomor && <div style={{display:"flex",justifyContent:"space-between",fontSize:8}}><span>No.</span><span>{tx?.id||`${dapur?.kode||"XXX"}/20260812/0001`}</span></div>}
       {tmpl.showTanggal && <div style={{display:"flex",justifyContent:"space-between",fontSize:8}}><span>Tanggal</span><span>{new Date(tx?.tanggal||Date.now()).toLocaleDateString("id-ID")}</span></div>}
@@ -314,7 +313,8 @@ const ReceiptPrev = ({tx,tmpl,dapur}) => {
           <div style={{textAlign:"center",flex:1}}><div>Diterima,</div><div style={{height:18,borderBottom:"0.5px solid #000",margin:"3px 0"}}/><div>(.........)</div></div>
         </div>
       )}
-      {tmpl.footer && <>{dash}<div style={{textAlign:"center",fontSize:8}}>{tmpl.footer}</div></>}
+      {tmpl.showCatatan && tmpl.catatan && <>{dash}<div style={{textAlign:"center",fontSize:8}}>{tmpl.catatan}</div></>}
+      {tmpl.showFooter && tmpl.footer && <>{dash}<div style={{textAlign:"center",fontSize:8}}>{tmpl.footer}</div></>}
     </div>
   );
 };
@@ -680,7 +680,7 @@ function App() {
             <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:16}}>
               <p style={{fontSize:11,fontWeight:"bold",color:"#64748b",textTransform:"uppercase",letterSpacing:"0.05em",margin:"0 0 12px"}}>Pengaturan Cetak</p>
               <div style={{display:"grid",gap:12}}>
-                {[{k:"showNomor",l:"Nomor Dokumen"},{k:"showTanggal",l:"Tanggal & Waktu"},{k:"showPenerima",l:"Kolom Penerima"},{k:"showTtd",l:"Tanda Terima (diserahkan/diterima)"},{k:"showStempel",l:"Cap/Stempel Mengetahui"}].map(s=>(
+                {[{k:"showAlamat",l:"Tampilkan Alamat"},{k:"showTelepon",l:"Tampilkan No. Telepon"},{k:"showJudul",l:"Tampilkan Judul Dokumen"},{k:"showNomor",l:"Nomor Dokumen"},{k:"showTanggal",l:"Tanggal & Waktu"},{k:"showPenerima",l:"Kolom Penerima"},{k:"showTtd",l:"Tanda Terima (diserahkan/diterima)"},{k:"showStempel",l:"Cap/Stempel Mengetahui"},{k:"showCatatan",l:"Tampilkan Catatan"},{k:"showFooter",l:"Tampilkan Footer"}].map(s=>(
                   <div key={s.k} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:13}}>{s.l}</span><Toggle value={template[s.k]} onChange={v=>setTpl(s.k,v)}/></div>
                 ))}
                 <div>
